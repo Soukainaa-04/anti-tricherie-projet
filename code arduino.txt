@@ -1,0 +1,138 @@
+#include <Adafruit_NeoPixel.h>
+
+#define NEOPIXEL_RING_PIN_IN   2
+#define REFLECTIVEIR_PIN_COLL  3
+#define VOLTAGE_PIN A0
+#define TABLE_ID 1
+
+#define NeoPixel_Ring_NUMOFLEDS 12
+Adafruit_NeoPixel NeoPixel_Ring(NeoPixel_Ring_NUMOFLEDS, NEOPIXEL_RING_PIN_IN, NEO_GRB + NEO_KHZ800);
+
+int irBaseValue = 0;
+const int detectionDelay = 2000;
+const int stableDelay = 1000;
+const int irChangeThreshold = 80;
+const int minStableCount = 15;
+
+const float lowVoltageThreshold = 3.5;
+int checkInterval = 500;
+const unsigned long fraudDuration = 300000;
+
+bool fraudeActive = false;
+unsigned long fraudStartTime = 0;
+
+void setup() {
+    Serial.begin(9600);
+    while (!Serial);
+    Serial.print("Systeme demarre - Table ID: ");
+    Serial.println(TABLE_ID);
+    Serial.println("Calibration en cours...");
+    NeoPixel_Ring.begin();
+    NeoPixel_Ring.show();
+    NeoPixel_Ring.setBrightness(50);
+    Serial.println("Assurez-vous que la zone sous la table est vide pour la calibration du capteur IR.");
+    delay(stableDelay);
+    long sum = 0;
+    const int numReadings = 10;
+    for (int i = 0; i < numReadings; i++) {
+        sum += analogRead(REFLECTIVEIR_PIN_COLL);
+        delay(50);
+    }
+    irBaseValue = sum / numReadings;
+    Serial.print("Valeur de base du capteur IR : ");
+    Serial.println(irBaseValue);
+    setLedState(false);
+}
+
+void loop() {
+    int voltageRaw = analogRead(VOLTAGE_PIN);
+    float voltage = (voltageRaw / 1023.0) * 5.0;
+    Serial.print("Table ID: ");
+    Serial.print(TABLE_ID);
+    Serial.print(" - Tension: ");
+    Serial.print(voltage);
+    Serial.println(" V");
+    if (voltage < lowVoltageThreshold) {
+        checkInterval = 1000;
+        Serial.print("Table ID: ");
+        Serial.print(TABLE_ID);
+        Serial.println(" - TENSION BASSE! Mode economie d'energie.");
+        if (!fraudeActive) {
+            setLedStateLowVoltage();
+        }
+    } else {
+        checkInterval = 500;
+        if (!fraudeActive) {
+            setLedState(false);
+        }
+    }
+    int irValue = analogRead(REFLECTIVEIR_PIN_COLL);
+    int irVariation = abs(irValue - irBaseValue);
+    if (fraudeActive && (millis() - fraudStartTime >= fraudDuration)) {
+        Serial.print("Table ID: ");
+        Serial.print(TABLE_ID);
+        Serial.println(" - Fin de l'alerte fraude (5 minutes ecoulees).");
+        Serial.print("ALERT:TABLE_ID=");
+        Serial.print(TABLE_ID);
+        Serial.println(";STATUS=RESOLVED;TYPE=DEVICE_CLEARED");
+        setLedState(false);
+        fraudeActive = false;
+    }
+    if (irVariation > irChangeThreshold && !fraudeActive) {
+        Serial.print("Table ID: ");
+        Serial.print(TABLE_ID);
+        Serial.print(" - Variation IR detectee: ");
+        Serial.print(irVariation);
+        Serial.println(". Verification de la fraude...");
+        unsigned long startTime = millis();
+        int stableCount = 0;
+        while (millis() - startTime < detectionDelay) {
+            int currentValue = analogRead(REFLECTIVEIR_PIN_COLL);
+            int currentVariation = abs(currentValue - irBaseValue);
+            if (currentVariation > irChangeThreshold) {
+                stableCount++;
+            }
+            delay(100);
+        }
+        if (stableCount >= minStableCount) {
+            Serial.print("Table ID: ");
+            Serial.print(TABLE_ID);
+            Serial.println(" - FRAUDE DETECTEE : Appareil electronique !");
+            Serial.print("ALERT:TABLE_ID=");
+            Serial.print(TABLE_ID);
+            Serial.println(";STATUS=ACTIVE;TYPE=DEVICE_DETECTED");
+            setLedState(true);
+            fraudeActive = true;
+            fraudStartTime = millis();
+        } else {
+            Serial.print("Table ID: ");
+            Serial.print(TABLE_ID);
+            Serial.println(" - Aucune fraude confirmee (variation breve ou interference).");
+        }
+    } else if (!fraudeActive) {
+        Serial.print("Table ID: ");
+        Serial.print(TABLE_ID);
+        Serial.println(" - Aucune activite suspecte.");
+    }
+    delay(checkInterval);
+}
+
+void setLedState(bool fraudDetected) {
+    if (fraudDetected) {
+        for (int i = 0; i < NeoPixel_Ring_NUMOFLEDS; i++) {
+            NeoPixel_Ring.setPixelColor(i, NeoPixel_Ring.Color(255, 0, 0));
+        }
+    } else {
+        for (int i = 0; i < NeoPixel_Ring_NUMOFLEDS; i++) {
+            NeoPixel_Ring.setPixelColor(i, NeoPixel_Ring.Color(0, 0, 0));
+        }
+    }
+    NeoPixel_Ring.show();
+}
+
+void setLedStateLowVoltage() {
+    for (int i = 0; i < NeoPixel_Ring_NUMOFLEDS; i++) {
+        NeoPixel_Ring.setPixelColor(i, NeoPixel_Ring.Color(0, 0, 255));
+    }
+    NeoPixel_Ring.show();
+}
